@@ -3,8 +3,8 @@
 ==============================================================================
 1. Overview                                                     *auto_convert*
 
-Auto Convert checks recently changed lines every three seconds and when Insert
-mode ends. It uses nearby context to convert romanized or phonetic input into the
+Auto Convert checks recently changed lines every three seconds, right after a
+new line is started in Insert mode, and when Insert mode ends. It uses nearby context to convert romanized or phonetic input into the
 intended language and writing system. Japanese romaji, Chinese pinyin, Korean
 romanization, and similar input methods can be handled without limiting the
 plugin to one language. Changes are applied only to the Vim buffer; Auto Convert

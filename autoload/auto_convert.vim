@@ -401,9 +401,20 @@ function! s:Forget(buf) abort
   endif
 endfunction
 
+" insert中の改行（行数の変化）を検知して即チェック。
+" 3秒周期を待たずに、改行で書き終えた行がすぐ変換される
+function! s:OnTextChangedI() abort
+  let n = line('$')
+  if get(b:, 'auto_convert_lastcount', -1) != n
+    let b:auto_convert_lastcount = n
+    call auto_convert#Tick()
+  endif
+endfunction
+
 augroup AutoConvert
   autocmd!
   " insertを抜けた瞬間にも即チェック（入力直後にすぐ直す）
   autocmd InsertLeave * call auto_convert#Tick()
+  autocmd TextChangedI,TextChangedP * call s:OnTextChangedI()
   autocmd BufWipeout * call s:Forget(str2nr(expand('<abuf>')))
 augroup END
