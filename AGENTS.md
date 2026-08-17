@@ -23,6 +23,7 @@
 - 変更後は対象機能のE2Eテストと `git diff --check` を実行する。
 - APIを使うE2Eテストは `vim -Nu NONE -n -es -S test/test_auto_convert.vim` など、`test/test_auto_convert*.vim` を個別に実行し、`test/results/` の結果を確認する。
 - 混在入力の境界スペース削除は `test/test_auto_convert_boundary.vim` で確認する（`boundary_space=REMOVED(OK)` が合格）。
+- 短い断片・同音語の文脈変換は `test/test_auto_convert_fragment.vim` で確認する（`fragment=OK` と `homophone=OK` が合格）。
 - テスト方法を追加・変更した場合は、このファイルへ実行コマンドと確認対象を追記する。
 - 利用者への変更報告では、利用者にとって何が変わったか、どう確認したかを簡潔に説明する。
 
@@ -31,4 +32,3 @@
 - ファイルを変更したら、日本語のコミットメッセージでコミットする。
 - コミットしたら同じターンでpushする。
 - pushできない場合は、理由と未pushのコミットIDを報告する。
-- 短い断片・同音語の文脈変換は `test/test_auto_convert_fragment.vim` で確認する（`fragment=OK` と `homophone=OK` が合格）。
