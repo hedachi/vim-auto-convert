@@ -31,3 +31,4 @@
 - ファイルを変更したら、日本語のコミットメッセージでコミットする。
 - コミットしたら同じターンでpushする。
 - pushできない場合は、理由と未pushのコミットIDを報告する。
+- 短い断片・同音語の文脈変換は `test/test_auto_convert_fragment.vim` で確認する（`fragment=OK` と `homophone=OK` が合格）。
