@@ -1,37 +1,37 @@
-" llm_ime.vim - LLMによる文脈依存の入力変換
+" auto_convert.vim - LLMによる文脈依存の入力変換
 " 3秒ごと（+ insertモードを抜けた瞬間）に、前回チェック時とのバッファ差分を見て、
 " 変わった行だけをAIに送り、ローマ字・音写入力を意図した言語の表記へ変換する。
 " ファイルには一切書き込まない（バッファ内のみ書き換え）。
 " 問い合わせ中に内容が変わった行への結果は破棄する（バッティング防止）。
 
-if exists('g:loaded_llm_ime')
+if exists('g:loaded_auto_convert')
   finish
 endif
-let g:loaded_llm_ime = 1
+let g:loaded_auto_convert = 1
 
 if !has('job') || !has('channel')
   finish
 endif
 
-let g:llm_ime_enabled   = get(g:, 'llm_ime_enabled', 1)
-let g:llm_ime_interval  = get(g:, 'llm_ime_interval', 3000)
+let g:auto_convert_enabled   = get(g:, 'auto_convert_enabled', 1)
+let g:auto_convert_interval  = get(g:, 'auto_convert_interval', 3000)
 " provider: 'luna' (gpt-5.6-luna, 約1.5秒) / 'deepseek' (deepseek-v4-flash, 約7秒)
-let g:llm_ime_provider  = get(g:, 'llm_ime_provider', 'luna')
-let g:llm_ime_context   = get(g:, 'llm_ime_context', 8)
-let g:llm_ime_max_lines = get(g:, 'llm_ime_max_lines', 40)
-let g:llm_ime_target_language = get(g:, 'llm_ime_target_language', 'auto')
-let g:llm_ime_logfile   = get(g:, 'llm_ime_logfile', expand('~/.vim/llm_ime.log'))
-let g:llm_ime_model     = get(g:, 'llm_ime_model', 'gpt-5.6-luna')
-let g:llm_ime_effort    = get(g:, 'llm_ime_effort', 'none')
-let g:llm_ime_deepseek_model = get(g:, 'llm_ime_deepseek_model', 'deepseek-v4-flash')
+let g:auto_convert_provider  = get(g:, 'auto_convert_provider', 'luna')
+let g:auto_convert_context   = get(g:, 'auto_convert_context', 8)
+let g:auto_convert_max_lines = get(g:, 'auto_convert_max_lines', 40)
+let g:auto_convert_target_language = get(g:, 'auto_convert_target_language', 'auto')
+let g:auto_convert_logfile   = get(g:, 'auto_convert_logfile', expand('~/.vim/auto_convert.log'))
+let g:auto_convert_model     = get(g:, 'auto_convert_model', 'gpt-5.6-luna')
+let g:auto_convert_effort    = get(g:, 'auto_convert_effort', 'none')
+let g:auto_convert_deepseek_model = get(g:, 'auto_convert_deepseek_model', 'deepseek-v4-flash')
 " []への回答に使う賢いモデル（誤字修正とは別ジョブで並行実行）
-let g:llm_ime_ask_model  = get(g:, 'llm_ime_ask_model', 'gpt-5.6-sol')
-let g:llm_ime_ask_effort = get(g:, 'llm_ime_ask_effort', 'none')
+let g:auto_convert_ask_model  = get(g:, 'auto_convert_ask_model', 'gpt-5.6-sol')
+let g:auto_convert_ask_effort = get(g:, 'auto_convert_ask_effort', 'none')
 
 " AX用: 直近の実行結果 {'time':..., 'status':..., 'detail':...}
-let g:llm_ime_last = {}
+let g:auto_convert_last = {}
 
-highlight default link LlmImeHl DiffText
+highlight default link AutoConvertHl DiffText
 
 let s:snap = {}
 let s:job = v:null
@@ -51,21 +51,21 @@ let s:askprompt = "あなたはテキストエディタ内のAIアシスタン�
 
 function! s:Log(msg) abort
   try
-    call mkdir(fnamemodify(g:llm_ime_logfile, ':h'), 'p')
-    call writefile([strftime('%Y/%m/%d %H:%M:%S') . ' ' . a:msg], g:llm_ime_logfile, 'a')
+    call mkdir(fnamemodify(g:auto_convert_logfile, ':h'), 'p')
+    call writefile([strftime('%Y/%m/%d %H:%M:%S') . ' ' . a:msg], g:auto_convert_logfile, 'a')
   catch
   endtry
 endfunction
 
 function! s:Provider() abort
-  if g:llm_ime_provider ==# 'deepseek'
+  if g:auto_convert_provider ==# 'deepseek'
     return {'url': 'https://api.deepseek.com/chat/completions',
           \ 'keyenv': 'DEEPSEEK_API_KEY',
-          \ 'extra': {'model': g:llm_ime_deepseek_model, 'temperature': 0}}
+          \ 'extra': {'model': g:auto_convert_deepseek_model, 'temperature': 0}}
   endif
   return {'url': 'https://api.openai.com/v1/chat/completions',
         \ 'keyenv': 'OPENAI_API_KEY',
-        \ 'extra': {'model': g:llm_ime_model, 'reasoning_effort': g:llm_ime_effort, 'temperature': 0}}
+        \ 'extra': {'model': g:auto_convert_model, 'reasoning_effort': g:auto_convert_effort, 'temperature': 0}}
 endfunction
 
 " old/newの共通prefix/suffixを除いた変更範囲を返す（newでの1-indexed閉区間）
@@ -83,8 +83,8 @@ function! s:DiffRange(old, new) abort
   return [p + 1, nn - sfx]
 endfunction
 
-function! llm_ime#Tick(...) abort
-  if !g:llm_ime_enabled
+function! auto_convert#Tick(...) abort
+  if !g:auto_convert_enabled
     return
   endif
   if s:job isnot v:null && job_status(s:job) ==# 'run'
@@ -118,10 +118,10 @@ function! llm_ime#Tick(...) abort
     let lend = line('.') - 1
     let partial = 1
   endif
-  if lend - lstart + 1 > g:llm_ime_max_lines
+  if lend - lstart + 1 > g:auto_convert_max_lines
     " 大きな貼り付け等は対象外
     let s:snap[buf] = cur
-    call s:Log(printf('skip: %d lines changed (> max %d)', lend - lstart + 1, g:llm_ime_max_lines))
+    call s:Log(printf('skip: %d lines changed (> max %d)', lend - lstart + 1, g:auto_convert_max_lines))
     return
   endif
   let target = cur[lstart - 1 : lend - 1]
@@ -162,7 +162,7 @@ function! s:Send(buf, cur, lstart, lend, target, partial, askset) abort
   if empty(numbered)
     return
   endif
-  let nctx = g:llm_ime_context
+  let nctx = g:auto_convert_context
   let before = a:lstart - 1 - nctx > 0 ? a:cur[a:lstart - 1 - nctx : a:lstart - 2]
         \ : (a:lstart >= 2 ? a:cur[0 : a:lstart - 2] : [])
   let after = a:cur[a:lend : a:lend - 1 + nctx]
@@ -171,7 +171,7 @@ function! s:Send(buf, cur, lstart, lend, target, partial, askset) abort
         \ 'messages': [
         \   {'role': 'system', 'content': s:prompt},
         \   {'role': 'user', 'content': json_encode({
-        \      'target_language': g:llm_ime_target_language,
+        \      'target_language': g:auto_convert_target_language,
         \      'context_before': before, 'target': numbered, 'context_after': after})},
         \ ]})
   let s:req = {'buf': a:buf, 'tick': getbufvar(a:buf, 'changedtick'),
@@ -191,7 +191,7 @@ function! s:Send(buf, cur, lstart, lend, target, partial, askset) abort
   let ch = job_getchannel(s:job)
   call ch_sendraw(ch, json_encode(body))
   call ch_close_in(ch)
-  call s:Log(printf('send: buf=%d L%d-%d (%d lines) provider=%s', a:buf, a:lstart, a:lend, len(a:target), g:llm_ime_provider))
+  call s:Log(printf('send: buf=%d L%d-%d (%d lines) provider=%s', a:buf, a:lstart, a:lend, len(a:target), g:auto_convert_provider))
 endfunction
 
 " []行だけを賢いモデルに送って回答させる
@@ -217,13 +217,13 @@ function! s:SendAsk(buf, cur, lstart, lend, target, askset) abort
         \ : (afirst >= 2 ? a:cur[0 : afirst - 2] : [])
   let after = a:cur[alast : alast - 1 + nctx]
   let body = {
-        \ 'model': g:llm_ime_ask_model,
-        \ 'reasoning_effort': g:llm_ime_ask_effort,
+        \ 'model': g:auto_convert_ask_model,
+        \ 'reasoning_effort': g:auto_convert_ask_effort,
         \ 'response_format': {'type': 'json_object'},
         \ 'messages': [
         \   {'role': 'system', 'content': s:askprompt},
         \   {'role': 'user', 'content': json_encode({
-        \      'target_language': g:llm_ime_target_language,
+        \      'target_language': g:auto_convert_target_language,
         \      'context_before': before, 'target': numbered, 'context_after': after})},
         \ ]}
   let s:areq = {'buf': a:buf, 'tick': getbufvar(a:buf, 'changedtick'),
@@ -243,7 +243,7 @@ function! s:SendAsk(buf, cur, lstart, lend, target, askset) abort
   let ch = job_getchannel(s:ajob)
   call ch_sendraw(ch, json_encode(body))
   call ch_close_in(ch)
-  call s:Log(printf('ask-send: buf=%d lines=%s model=%s/%s', a:buf, join(keys(numbered), ','), g:llm_ime_ask_model, g:llm_ime_ask_effort))
+  call s:Log(printf('ask-send: buf=%d lines=%s model=%s/%s', a:buf, join(keys(numbered), ','), g:auto_convert_ask_model, g:auto_convert_ask_effort))
 endfunction
 
 function! s:AOnClose(ch) abort
@@ -271,10 +271,10 @@ function! s:OnErr(ch, msg) abort
 endfunction
 
 function! s:Fail(msg) abort
-  let g:llm_ime_last = {'time': strftime('%H:%M:%S'), 'status': 'error', 'detail': a:msg}
+  let g:auto_convert_last = {'time': strftime('%H:%M:%S'), 'status': 'error', 'detail': a:msg}
   call s:Log('error: ' . a:msg)
   echohl WarningMsg
-  echo 'LlmIme error: ' . strpart(a:msg, 0, &columns - 20)
+  echo 'AutoConvert error: ' . strpart(a:msg, 0, &columns - 20)
   echohl None
 endfunction
 
@@ -354,7 +354,7 @@ function! s:ApplyFixes(r, fixes, elapsed) abort
       endif
     endif
     call s:Log(printf('fix L%d', lnum))
-    let span = llm_ime#CharSpan(old, text)
+    let span = auto_convert#CharSpan(old, text)
     if span[1] > 0
       call add(spans, [lnum, span[0], span[1]])
     endif
@@ -378,7 +378,7 @@ function! s:ApplyFixes(r, fixes, elapsed) abort
   else
     let s:snap[r.buf] = getbufline(r.buf, 1, '$')
   endif
-  let g:llm_ime_last = {'time': strftime('%H:%M:%S'), 'status': 'ok', 'kind': r.kind,
+  let g:auto_convert_last = {'time': strftime('%H:%M:%S'), 'status': 'ok', 'kind': r.kind,
         \ 'detail': printf('%d lines fixed (%s)', len(changed), a:elapsed), 'lines': changed}
   if !empty(changed)
     call s:Log(printf('%s: buf=%d lines=%s (%s)', r.kind ==# 'ask' ? 'answered' : 'fixed', r.buf, join(changed, ','), a:elapsed))
@@ -386,7 +386,7 @@ function! s:ApplyFixes(r, fixes, elapsed) abort
     if r.kind ==# 'ask'
       echo printf('Ai回答: L%s (%s)', join(changed, ',L'), a:elapsed)
     else
-      echo printf('LlmIme: %d行修正 (L%s)', len(changed), join(changed, ',L'))
+      echo printf('AutoConvert: %d行修正 (L%s)', len(changed), join(changed, ',L'))
     endif
   elseif r.kind ==# 'typo'
     call s:Log('clean: no typo (' . a:elapsed . ')')
@@ -396,7 +396,7 @@ function! s:ApplyFixes(r, fixes, elapsed) abort
 endfunction
 
 " 変わった文字だけを光らせるため、行内の変更範囲（1-indexedバイト位置と長さ）を返す
-function! llm_ime#CharSpan(old, new) abort
+function! auto_convert#CharSpan(old, new) abort
   let oc = split(a:old, '\zs')
   let nc = split(a:new, '\zs')
   let p = 0
@@ -431,12 +431,12 @@ function! s:Highlight(buf, items) abort
   for item in a:items
     call add(chunk, item)
     if len(chunk) == 8
-      call add(ids, matchaddpos('LlmImeHl', chunk))
+      call add(ids, matchaddpos('AutoConvertHl', chunk))
       let chunk = []
     endif
   endfor
   if !empty(chunk)
-    call add(ids, matchaddpos('LlmImeHl', chunk))
+    call add(ids, matchaddpos('AutoConvertHl', chunk))
   endif
   let winid = win_getid()
   call timer_start(2000, {-> map(ids, {_, id -> s:SafeMatchDelete(id, winid)})})
@@ -458,7 +458,7 @@ let s:ireq = {}
 let s:iout = []
 let s:ierr = []
 
-function! llm_ime#Instruct(instruction) abort
+function! auto_convert#Instruct(instruction) abort
   if s:ijob isnot v:null && job_status(s:ijob) ==# 'run'
     echo 'Ai: 前の指示を実行中です'
     return
@@ -543,26 +543,26 @@ function! s:IOnClose(ch) abort
   echo printf('Ai: 完了 (%s)。undoはu一回', elapsed)
 endfunction
 
-command! -nargs=1 Ai call llm_ime#Instruct(<q-args>)
+command! -nargs=1 Ai call auto_convert#Instruct(<q-args>)
 
-function! llm_ime#Toggle() abort
-  let g:llm_ime_enabled = !g:llm_ime_enabled
-  echo 'LlmIme: ' . (g:llm_ime_enabled ? 'ON' : 'OFF')
+function! auto_convert#Toggle() abort
+  let g:auto_convert_enabled = !g:auto_convert_enabled
+  echo 'AutoConvert: ' . (g:auto_convert_enabled ? 'ON' : 'OFF')
 endfunction
 
-function! llm_ime#Status() abort
-  echo printf('LlmIme: %s / provider=%s / last=%s',
-        \ g:llm_ime_enabled ? 'ON' : 'OFF', g:llm_ime_provider, string(g:llm_ime_last))
+function! auto_convert#Status() abort
+  echo printf('AutoConvert: %s / provider=%s / last=%s',
+        \ g:auto_convert_enabled ? 'ON' : 'OFF', g:auto_convert_provider, string(g:auto_convert_last))
 endfunction
 
-command! LlmImeToggle call llm_ime#Toggle()
-command! LlmImeNow call llm_ime#Tick()
-command! LlmImeStatus call llm_ime#Status()
+command! AutoConvertToggle call auto_convert#Toggle()
+command! AutoConvertNow call auto_convert#Tick()
+command! AutoConvertStatus call auto_convert#Status()
 
-let s:timer = timer_start(g:llm_ime_interval, function('llm_ime#Tick'), {'repeat': -1})
+let s:timer = timer_start(g:auto_convert_interval, function('auto_convert#Tick'), {'repeat': -1})
 
-augroup LlmIme
+augroup AutoConvert
   autocmd!
   " insertを抜けた瞬間にも即チェック（入力直後にすぐ直す）
-  autocmd InsertLeave * call llm_ime#Tick()
+  autocmd InsertLeave * call auto_convert#Tick()
 augroup END

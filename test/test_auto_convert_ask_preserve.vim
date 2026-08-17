@@ -3,13 +3,13 @@
 set nocompatible
 let s:root = fnamemodify(expand('<sfile>'), ':p:h:h')
 execute 'set runtimepath^=' . fnameescape(s:root)
-runtime plugin/llm_ime.vim
+runtime plugin/auto_convert.vim
 call mkdir(s:root . '/test/results', 'p')
 enew
 call setline(1, '最近のvimについて')
-LlmImeNow
+AutoConvertNow
 call setline(1, ['最近のvimについて', 'saikin ha neovim ttenoga hayatteru?[]'])
-LlmImeNow
+AutoConvertNow
 " 回答が入るまで待つ
 let s:waited = 0
 while s:waited < 600 && getline(2) =~# '\[\]'
@@ -19,15 +19,15 @@ endwhile
 let s:answered = getline(2)
 " その後、別の行を追記して誤字修正tickを何度も回す（動画の状況を再現）
 call append(2, 'naniga chigaundesuka?')
-LlmImeNow
+AutoConvertNow
 sleep 3000m
-LlmImeNow
+AutoConvertNow
 sleep 3000m
-LlmImeNow
+AutoConvertNow
 sleep 3000m
 let s:r = ['answered=' . s:answered]
 call add(s:r, 'final_l2=' . getline(2))
 call add(s:r, 'final_l3=' . getline(3))
 call add(s:r, 'preserved=' . (getline(2) =~# '\[..*\]' ? 'YES' : 'NO'))
-call writefile(s:r, s:root . '/test/results/test_llm_ime_ask_preserve_result.txt')
+call writefile(s:r, s:root . '/test/results/test_auto_convert_ask_preserve_result.txt')
 qall!
