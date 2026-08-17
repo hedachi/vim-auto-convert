@@ -40,7 +40,7 @@ wo jintian qu gongsi
 
 ## 必要なもの
 
-- `+job` と `+channel` が有効なVim
+- Vim 8.2以上（`+job` と `+channel` が有効なもの）。Neovimは未対応です
 - `curl`
 - OpenAIまたはDeepSeekのAPIキー
 

@@ -9,7 +9,8 @@ if exists('g:loaded_auto_convert')
 endif
 let g:loaded_auto_convert = 1
 
-if !has('job') || !has('channel')
+" Vim 8.2+ 専用（job/channel/setbufline/getenv等を使用）。Neovim非対応。curl必須
+if !has('job') || !has('channel') || v:version < 802 || !executable('curl')
   finish
 endif
 
@@ -45,11 +46,31 @@ let s:aout = []
 let s:aerr = []
 let s:ask_backoff = 0
 
-let s:prompt = "あなたはテキストエディタの入力変換エンジン。ユーザーが書きかけのテキストの一部（target、行番号つき）を、前後の文脈（context_before / context_after）から意図した言語と表記を判断して変換する。\n\n変換対象:\n- ローマ字・ラテン文字による音写入力を、文脈に合う言語の自然な文字・単語・文へ変換する。日本語なら仮名と漢字、中国語なら漢字、韓国語ならハングルなど、言語を限定しない\n- target_language が auto 以外なら、その言語を優先する\n- 明らかなタイプミス、誤変換、文字の入れ替わり・抜け・重複も修正する\n- 例: 日本語文脈の「kouiu kanzi de」→「こういう感じで」、「kontekisuto」→「コンテキスト」\n\n守ること:\n- すでに自然な表記の部分は変更しない\n- 意味の言い換え、文体・敬語の変更、内容の追加・削除、句読点やスペースの好み変更をしない\n- 英語の技術用語・コマンド・固有名詞・URL・コードはそのまま残す\n- 意図した言語や変換内容を確信できない部分はそのまま残す\n- 行の分割・結合・並べ替えをしない\n- 中身の入った角括弧 [〜] はAIアシスタントの回答なので、中身も括弧も変更しない\n\n出力: JSONのみ。{\"fixes\": {\"行番号\": \"その行全体の変換後テキスト\"}}。変換が必要な行だけ入れる。変換が1行もなければ {\"fixes\": {}}。"
+let s:prompt = "あなたはテキストエディタの入力変換エンジン。ユーザーが書きかけのテキストの一部（target、行番号つき）を、前後の文脈（context_before / context_after）から意図した言語と表記を判断して変換する。\n\n変換対象:\n- ローマ字・ラテン文字による音写入力を、文脈に合う言語の自然な文字・単語・文へ変換する。日本語なら仮名と漢字、中国語なら漢字、韓国語ならハングルなど、言語を限定しない\n- target_language が auto 以外なら、その言語を優先する\n- 明らかなタイプミス、誤変換、文字の入れ替わり・抜け・重複も修正する\n- 例: 日本語文脈の「kouiu kanzi de」→「こういう感じで」、「kontekisuto」→「コンテキスト」\n- 音写の単語区切りスペースと、音写と変換先言語の文字との境界のスペースは、変換先言語で不自然なら変換時に削除する（例: 日本語の「を kouiu」→「をこういう」）。英単語・技術用語の前後の自然なスペースは残す\n\n守ること:\n- すでに自然な表記の部分は変更しない\n- 意味の言い換え、文体・敬語の変更、内容の追加・削除をしない。変換していない箇所の句読点やスペースを変えない\n- 英語の技術用語・コマンド・固有名詞・URL・コードはそのまま残す\n- 意図した言語や変換内容を確信できない部分はそのまま残す\n- 行の分割・結合・並べ替えをしない\n- 中身の入った角括弧 [〜] はAIアシスタントの回答なので、中身も括弧も変更しない\n\n出力: JSONのみ。{\"fixes\": {\"行番号\": \"その行全体の変換後テキスト\"}}。変換が必要な行だけ入れる。変換が1行もなければ {\"fixes\": {}}。"
 
 let s:askprompt = "あなたはテキストエディタ内のAIアシスタント。ユーザーは自分のメモを書いていて、targetの行に [] （空の角括弧）を置いて回答を求めている。[] の中に回答を書く。\n\n依頼の読み取り方:\n- 依頼・質問は[]と同じ行にあるとは限らない。直前の行と文脈全体（context_before / context_after）から読み取る\n- 文脈はユーザー自身のメモであり、メモに書かれた話題をあなたへの作業依頼と誤解しない\n- 文脈から意図した言語を判定し、その言語で回答する。target_language が auto 以外ならその言語を優先する\n- ローマ字・ラテン文字の音写入力は、文脈に合う言語の自然な表記として読む\n- 依頼が曖昧でも、文脈から最も可能性の高い解釈で中身のある回答を書く\n\n書き方:\n- 回答は角括弧の中に書く。簡潔に、ただし具体的に\n- 角括弧の外は原文を保つ。ただし明らかな誤字と音写入力は自然な表記に変換してよい。意味の言い換え・内容の追加削除はしない\n\n出力: JSONのみ。{\"fixes\": {\"行番号\": \"その行全体（[]に回答が入った状態）\"}}"
 
+" APIキー未設定の警告は1回だけ出す（3秒ごとのログスパム防止）
+let s:keywarned = {}
+function! s:KeyOk(env) abort
+  if !empty(getenv(a:env))
+    return 1
+  endif
+  if !has_key(s:keywarned, a:env)
+    let s:keywarned[a:env] = 1
+    call s:Log('error: env ' . a:env . ' not set')
+    echohl WarningMsg
+    echo 'AutoConvert: 環境変数 ' . a:env . ' が未設定です'
+    echohl None
+  endif
+  return 0
+endfunction
+
 function! s:Log(msg) abort
+  " g:auto_convert_logfile = '' でログ無効化
+  if empty(g:auto_convert_logfile)
+    return
+  endif
   try
     call mkdir(fnamemodify(g:auto_convert_logfile, ':h'), 'p')
     call writefile([strftime('%Y/%m/%d %H:%M:%S') . ' ' . a:msg], g:auto_convert_logfile, 'a')
@@ -63,9 +84,13 @@ function! s:Provider() abort
           \ 'keyenv': 'DEEPSEEK_API_KEY',
           \ 'extra': {'model': g:auto_convert_deepseek_model, 'temperature': 0}}
   endif
+  " reasoning_effortがnone以外だとtemperature指定はAPIエラーになるため付けない
+  let extra = {'model': g:auto_convert_model, 'reasoning_effort': g:auto_convert_effort}
+  if g:auto_convert_effort ==# 'none'
+    let extra.temperature = 0
+  endif
   return {'url': 'https://api.openai.com/v1/chat/completions',
-        \ 'keyenv': 'OPENAI_API_KEY',
-        \ 'extra': {'model': g:auto_convert_model, 'reasoning_effort': g:auto_convert_effort, 'temperature': 0}}
+        \ 'keyenv': 'OPENAI_API_KEY', 'extra': extra}
 endfunction
 
 " old/newの共通prefix/suffixを除いた変更範囲を返す（newでの1-indexed閉区間）
@@ -148,8 +173,7 @@ endfunction
 
 function! s:Send(buf, cur, lstart, lend, target, partial, askset) abort
   let prov = s:Provider()
-  if empty(getenv(prov.keyenv))
-    call s:Log('error: env ' . prov.keyenv . ' not set')
+  if !s:KeyOk(prov.keyenv)
     return
   endif
   let numbered = {}
@@ -196,8 +220,7 @@ endfunction
 
 " []行だけを賢いモデルに送って回答させる
 function! s:SendAsk(buf, cur, lstart, lend, target, askset) abort
-  if empty(getenv('OPENAI_API_KEY'))
-    call s:Log('ask-error: env OPENAI_API_KEY not set')
+  if !s:KeyOk('OPENAI_API_KEY')
     return
   endif
   let numbered = {}
@@ -255,7 +278,7 @@ function! s:AOnClose(ch) abort
   catch
     let detail = raw ==# '' ? join(s:aerr, ' ') : strpart(raw, 0, 200)
     let s:ask_backoff = localtime() + 60
-    call s:Log('ask-error: ' . detail)
+    call s:Log('ask-error (len=' . strlen(raw) . ')')
     echohl WarningMsg | echo 'Ai []回答エラー: ' . strpart(detail, 0, &columns - 30) . '（60秒後に再試行）' | echohl None
     return
   endtry
@@ -288,17 +311,18 @@ function! s:OnClose(ch) abort
   try
     let resp = json_decode(raw)
   catch
-    call s:Fail('bad json: ' . strpart(raw, 0, 200))
+    " 本文はログに残さない方針のため長さだけ記録し、画面にだけ内容を出す
+    call s:Fail('bad json (len=' . strlen(raw) . ')')
     return
   endtry
   if type(resp) != v:t_dict || !has_key(resp, 'choices')
-    call s:Fail('api: ' . strpart(raw, 0, 200))
+    call s:Fail('api error: ' . strpart(get(get(resp, 'error', {}), 'message', 'unknown'), 0, 200))
     return
   endif
   try
     let fixes = json_decode(resp.choices[0].message.content).fixes
   catch
-    call s:Fail('bad content: ' . strpart(resp.choices[0].message.content, 0, 200))
+    call s:Fail('bad content (len=' . strlen(resp.choices[0].message.content) . ')')
     return
   endtry
   call s:ApplyFixes(s:req, fixes, elapsed)
@@ -464,8 +488,7 @@ function! auto_convert#Instruct(instruction) abort
     return
   endif
   let prov = s:Provider()
-  if empty(getenv(prov.keyenv))
-    echohl WarningMsg | echo 'Ai: 環境変数 ' . prov.keyenv . ' がありません' | echohl None
+  if !s:KeyOk(prov.keyenv)
     return
   endif
   let buf = bufnr('%')
@@ -512,7 +535,7 @@ function! s:IOnClose(ch) abort
     let text = json_decode(resp.choices[0].message.content).text
   catch
     let detail = raw ==# '' ? join(s:ierr, ' ') : strpart(raw, 0, 200)
-    call s:Log('ai-error: ' . detail)
+    call s:Log('ai-error (len=' . strlen(raw) . ')')
     echohl WarningMsg | echo 'Ai error: ' . strpart(detail, 0, &columns - 12) | echohl None
     return
   endtry
@@ -543,7 +566,11 @@ function! s:IOnClose(ch) abort
   echo printf('Ai: 完了 (%s)。undoはu一回', elapsed)
 endfunction
 
-command! -nargs=1 Ai call auto_convert#Instruct(<q-args>)
+command! -nargs=1 AutoConvertAi call auto_convert#Instruct(<q-args>)
+" :Ai は他プラグインが既に定義していたら遠慮する（短縮エイリアス）
+if exists(':Ai') != 2
+  command! -nargs=1 Ai call auto_convert#Instruct(<q-args>)
+endif
 
 function! auto_convert#Toggle() abort
   let g:auto_convert_enabled = !g:auto_convert_enabled
@@ -561,8 +588,16 @@ command! AutoConvertStatus call auto_convert#Status()
 
 let s:timer = timer_start(g:auto_convert_interval, function('auto_convert#Tick'), {'repeat': -1})
 
+" 閉じたバッファのsnapshotを掃除（メモリリーク防止）
+function! s:Forget(buf) abort
+  if has_key(s:snap, a:buf)
+    call remove(s:snap, a:buf)
+  endif
+endfunction
+
 augroup AutoConvert
   autocmd!
   " insertを抜けた瞬間にも即チェック（入力直後にすぐ直す）
   autocmd InsertLeave * call auto_convert#Tick()
+  autocmd BufWipeout * call s:Forget(str2nr(expand('<abuf>')))
 augroup END
