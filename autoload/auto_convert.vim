@@ -25,9 +25,8 @@ let g:auto_convert_logfile   = get(g:, 'auto_convert_logfile', expand('~/.vim/au
 let g:auto_convert_model     = get(g:, 'auto_convert_model', 'gpt-5.6-luna')
 let g:auto_convert_effort    = get(g:, 'auto_convert_effort', 'none')
 let g:auto_convert_deepseek_model = get(g:, 'auto_convert_deepseek_model', 'deepseek-v4-flash')
-" []への回答に使う賢いモデル（誤字修正とは別ジョブで並行実行）
-let g:auto_convert_ask_model  = get(g:, 'auto_convert_ask_model', 'gpt-5.6-sol')
-let g:auto_convert_ask_effort = get(g:, 'auto_convert_ask_effort', 'none')
+" プラグインファイル更新時の自動リロード（開発者向け。既定OFF）
+let g:auto_convert_autoreload = get(g:, 'auto_convert_autoreload', 0)
 
 " AX用: 直近の実行結果 {'time':..., 'status':..., 'detail':...}
 let g:auto_convert_last = {}
@@ -39,16 +38,9 @@ let s:job = v:null
 let s:req = {}
 let s:out = []
 let s:err = []
-" []回答用の別ジョブ（誤字修正と並行して動く）
-let s:ajob = v:null
-let s:areq = {}
-let s:aout = []
-let s:aerr = []
-let s:ask_backoff = 0
 
-let s:prompt = "あなたはテキストエディタの入力変換エンジン。ユーザーが書きかけのテキストの一部（target、行番号つき）を、前後の文脈（context_before / context_after）から意図した言語と表記を判断して変換する。\n\n変換対象:\n- ローマ字・ラテン文字による音写入力を、文脈に合う言語の自然な文字・単語・文へ変換する。日本語なら仮名と漢字、中国語なら漢字、韓国語ならハングルなど、言語を限定しない\n- target_language が auto 以外なら、その言語を優先する\n- 明らかなタイプミス、誤変換、文字の入れ替わり・抜け・重複も修正する\n- 例: 日本語文脈の「kouiu kanzi de」→「こういう感じで」、「kontekisuto」→「コンテキスト」\n- 音写の単語区切りスペースと、音写と変換先言語の文字との境界のスペースは、変換先言語で不自然なら変換時に削除する（例: 日本語の「を kouiu」→「をこういう」）。英単語・技術用語の前後の自然なスペースは残す\n\n守ること:\n- すでに自然な表記の部分は変更しない\n- 意味の言い換え、文体・敬語の変更、内容の追加・削除をしない。変換していない箇所の句読点やスペースを変えない\n- 英語の技術用語・コマンド・固有名詞・URL・コードはそのまま残す\n- 意図した言語や変換内容を確信できない部分はそのまま残す\n- 行の分割・結合・並べ替えをしない\n- 中身の入った角括弧 [〜] はAIアシスタントの回答なので、中身も括弧も変更しない\n\n出力: JSONのみ。{\"fixes\": {\"行番号\": \"その行全体の変換後テキスト\"}}。変換が必要な行だけ入れる。変換が1行もなければ {\"fixes\": {}}。"
+let s:prompt = "あなたはテキストエディタの入力変換エンジン。ユーザーが書きかけのテキストの一部（target、行番号つき）を、前後の文脈（context_before / context_after）から意図した言語と表記を判断して変換する。\n\n変換対象:\n- ローマ字・ラテン文字による音写入力を、文脈に合う言語の自然な文字・単語・文へ変換する。日本語なら仮名と漢字、中国語なら漢字、韓国語ならハングルなど、言語を限定しない\n- target_language が auto 以外なら、その言語を優先する\n- 明らかなタイプミス、誤変換、文字の入れ替わり・抜け・重複も修正する\n- 例: 日本語文脈の「kouiu kanzi de」→「こういう感じで」、「kontekisuto」→「コンテキスト」\n- 音写の単語区切りスペースと、音写と変換先言語の文字との境界のスペースは、変換先言語で不自然なら変換時に削除する（例: 日本語の「を kouiu」→「をこういう」）。英単語・技術用語の前後の自然なスペースは残す\n\n守ること:\n- すでに自然な表記の部分は変更しない\n- 意味の言い換え、文体・敬語の変更、内容の追加・削除をしない。変換していない箇所の句読点やスペースを変えない\n- 英語の技術用語・コマンド・固有名詞・URL・コードはそのまま残す\n- 意図した言語や変換内容を確信できない部分はそのまま残す\n- 行の分割・結合・並べ替えをしない\n\n出力: JSONのみ。{\"fixes\": {\"行番号\": \"その行全体の変換後テキスト\"}}。変換が必要な行だけ入れる。変換が1行もなければ {\"fixes\": {}}。"
 
-let s:askprompt = "あなたはテキストエディタ内のAIアシスタント。ユーザーは自分のメモを書いていて、targetの行に [] （空の角括弧）を置いて回答を求めている。[] の中に回答を書く。\n\n依頼の読み取り方:\n- 依頼・質問は[]と同じ行にあるとは限らない。直前の行と文脈全体（context_before / context_after）から読み取る\n- 文脈はユーザー自身のメモであり、メモに書かれた話題をあなたへの作業依頼と誤解しない\n- 文脈から意図した言語を判定し、その言語で回答する。target_language が auto 以外ならその言語を優先する\n- ローマ字・ラテン文字の音写入力は、文脈に合う言語の自然な表記として読む\n- 依頼が曖昧でも、文脈から最も可能性の高い解釈で中身のある回答を書く\n\n書き方:\n- 回答は角括弧の中に書く。簡潔に、ただし具体的に\n- 角括弧の外は原文を保つ。ただし明らかな誤字と音写入力は自然な表記に変換してよい。意味の言い換え・内容の追加削除はしない\n\n出力: JSONのみ。{\"fixes\": {\"行番号\": \"その行全体（[]に回答が入った状態）\"}}"
 
 " APIキー未設定の警告は1回だけ出す（3秒ごとのログスパム防止）
 let s:keywarned = {}
@@ -108,7 +100,17 @@ function! s:DiffRange(old, new) abort
   return [p + 1, nn - sfx]
 endfunction
 
+" 自動リロード用: このファイルのパスと読み込み時のmtime
+let s:selfpath = expand('<sfile>:p')
+let s:selfmtime = getftime(s:selfpath)
+
 function! auto_convert#Tick(...) abort
+  if g:auto_convert_autoreload && getftime(s:selfpath) > s:selfmtime
+    call timer_stop(s:timer)
+    call s:Log('plugin file updated -> reloading')
+    call timer_start(50, {-> execute('unlet! g:loaded_auto_convert | source ' . fnameescape(s:selfpath), '')})
+    return
+  endif
   if !g:auto_convert_enabled
     return
   endif
@@ -157,35 +159,18 @@ function! auto_convert#Tick(...) abort
     endif
     return
   endif
-  " [] を含む行は賢いモデルの別ジョブへ（誤字修正と並行）
-  let askset = {}
-  for i in range(len(target))
-    if target[i] =~# '\[\]'
-      let askset[lstart + i] = 1
-    endif
-  endfor
-  if !empty(askset) && localtime() >= s:ask_backoff
-        \ && !(s:ajob isnot v:null && job_status(s:ajob) ==# 'run')
-    call s:SendAsk(buf, cur, lstart, lend, target, askset)
-  endif
-  call s:Send(buf, cur, lstart, lend, target, partial, askset)
+  call s:Send(buf, cur, lstart, lend, target, partial)
 endfunction
 
-function! s:Send(buf, cur, lstart, lend, target, partial, askset) abort
+function! s:Send(buf, cur, lstart, lend, target, partial) abort
   let prov = s:Provider()
   if !s:KeyOk(prov.keyenv)
     return
   endif
   let numbered = {}
   for i in range(len(a:target))
-    " []行は賢いモデル担当なので誤字修正には渡さない
-    if !has_key(a:askset, a:lstart + i)
-      let numbered[string(a:lstart + i)] = a:target[i]
-    endif
+    let numbered[string(a:lstart + i)] = a:target[i]
   endfor
-  if empty(numbered)
-    return
-  endif
   let nctx = g:auto_convert_context
   let before = a:lstart - 1 - nctx > 0 ? a:cur[a:lstart - 1 - nctx : a:lstart - 2]
         \ : (a:lstart >= 2 ? a:cur[0 : a:lstart - 2] : [])
@@ -200,7 +185,7 @@ function! s:Send(buf, cur, lstart, lend, target, partial, askset) abort
         \ ]})
   let s:req = {'buf': a:buf, 'tick': getbufvar(a:buf, 'changedtick'),
         \ 'start': a:lstart, 'end': a:lend, 'target': a:target, 'sent': reltime(),
-        \ 'partial': a:partial, 'curlen': len(a:cur), 'kind': 'typo'}
+        \ 'partial': a:partial, 'curlen': len(a:cur)}
   let s:out = []
   let s:err = []
   let cmd = ['/bin/sh', '-c',
@@ -216,73 +201,6 @@ function! s:Send(buf, cur, lstart, lend, target, partial, askset) abort
   call ch_sendraw(ch, json_encode(body))
   call ch_close_in(ch)
   call s:Log(printf('send: buf=%d L%d-%d (%d lines) provider=%s', a:buf, a:lstart, a:lend, len(a:target), g:auto_convert_provider))
-endfunction
-
-" []行だけを賢いモデルに送って回答させる
-function! s:SendAsk(buf, cur, lstart, lend, target, askset) abort
-  if !s:KeyOk('OPENAI_API_KEY')
-    return
-  endif
-  let numbered = {}
-  let asklnums = []
-  for i in range(len(a:target))
-    if has_key(a:askset, a:lstart + i)
-      let numbered[string(a:lstart + i)] = a:target[i]
-      call add(asklnums, a:lstart + i)
-    endif
-  endfor
-  " 文脈は差分範囲でなく[]の行を基準に前後40行取る
-  " （差分範囲内の誤字修正担当行も文脈に含めるため）
-  let nctx = 40
-  let afirst = min(asklnums)
-  let alast = max(asklnums)
-  let before = afirst - 1 - nctx > 0 ? a:cur[afirst - 1 - nctx : afirst - 2]
-        \ : (afirst >= 2 ? a:cur[0 : afirst - 2] : [])
-  let after = a:cur[alast : alast - 1 + nctx]
-  let body = {
-        \ 'model': g:auto_convert_ask_model,
-        \ 'reasoning_effort': g:auto_convert_ask_effort,
-        \ 'response_format': {'type': 'json_object'},
-        \ 'messages': [
-        \   {'role': 'system', 'content': s:askprompt},
-        \   {'role': 'user', 'content': json_encode({
-        \      'target_language': g:auto_convert_target_language,
-        \      'context_before': before, 'target': numbered, 'context_after': after})},
-        \ ]}
-  let s:areq = {'buf': a:buf, 'tick': getbufvar(a:buf, 'changedtick'),
-        \ 'start': a:lstart, 'end': a:lend, 'target': a:target, 'sent': reltime(),
-        \ 'kind': 'ask'}
-  let s:aout = []
-  let s:aerr = []
-  let cmd = ['/bin/sh', '-c',
-        \ 'curl -sS --max-time 90 https://api.openai.com/v1/chat/completions' .
-        \ ' -H "Content-Type: application/json"' .
-        \ ' -H "Authorization: Bearer $OPENAI_API_KEY" -d @-']
-  let s:ajob = job_start(cmd, {
-        \ 'out_cb': {ch, msg -> add(s:aout, msg)},
-        \ 'err_cb': {ch, msg -> add(s:aerr, msg)},
-        \ 'close_cb': function('s:AOnClose'),
-        \ })
-  let ch = job_getchannel(s:ajob)
-  call ch_sendraw(ch, json_encode(body))
-  call ch_close_in(ch)
-  call s:Log(printf('ask-send: buf=%d lines=%s model=%s/%s', a:buf, join(keys(numbered), ','), g:auto_convert_ask_model, g:auto_convert_ask_effort))
-endfunction
-
-function! s:AOnClose(ch) abort
-  let raw = join(s:aout, "\n")
-  let elapsed = printf('%.1fs', reltimefloat(reltime(s:areq.sent)))
-  try
-    let resp = json_decode(raw)
-    let fixes = json_decode(resp.choices[0].message.content).fixes
-  catch
-    let detail = raw ==# '' ? join(s:aerr, ' ') : strpart(raw, 0, 200)
-    let s:ask_backoff = localtime() + 60
-    call s:Log('ask-error (len=' . strlen(raw) . ')')
-    echohl WarningMsg | echo 'Ai []回答エラー: ' . strpart(detail, 0, &columns - 30) . '（60秒後に再試行）' | echohl None
-    return
-  endtry
-  call s:ApplyFixes(s:areq, fixes, elapsed)
 endfunction
 
 function! s:OnOut(ch, msg) abort
@@ -369,14 +287,6 @@ function! s:ApplyFixes(r, fixes, elapsed) abort
     endif
     call setbufline(r.buf, lnum, text)
     call add(changed, lnum)
-    if r.kind ==# 'ask' && has_key(s:snap, r.buf)
-      " 回答を書いた行はsnapshotにも反映し、誤字修正側が
-      " 「新しい差分」として再処理して回答を壊すのを防ぐ
-      let sidx = index(s:snap[r.buf], old)
-      if sidx >= 0
-        let s:snap[r.buf][sidx] = text
-      endif
-    endif
     call s:Log(printf('fix L%d', lnum))
     let span = auto_convert#CharSpan(old, text)
     if span[1] > 0
@@ -387,10 +297,7 @@ function! s:ApplyFixes(r, fixes, elapsed) abort
   if dropped > 0
     call s:Log(printf('dropped %d fixes (line changed during request)', dropped))
   endif
-  if r.kind !=# 'typo'
-    " []回答はsnapshotを触らない。書き込んだ回答は次のtickの誤字チェックで
-    " cleanと判定されてsnapshotに取り込まれる
-  elseif !strict
+  if !strict
     " 問い合わせ中に編集があった場合はsnapshotを進めず、次のtickで全体を再チェック
   elseif r.partial
     " カーソル行以降は未処理なので、snapshotは処理済み部分だけ進める
@@ -402,20 +309,14 @@ function! s:ApplyFixes(r, fixes, elapsed) abort
   else
     let s:snap[r.buf] = getbufline(r.buf, 1, '$')
   endif
-  let g:auto_convert_last = {'time': strftime('%H:%M:%S'), 'status': 'ok', 'kind': r.kind,
+  let g:auto_convert_last = {'time': strftime('%H:%M:%S'), 'status': 'ok',
         \ 'detail': printf('%d lines fixed (%s)', len(changed), a:elapsed), 'lines': changed}
   if !empty(changed)
-    call s:Log(printf('%s: buf=%d lines=%s (%s)', r.kind ==# 'ask' ? 'answered' : 'fixed', r.buf, join(changed, ','), a:elapsed))
+    call s:Log(printf('fixed: buf=%d lines=%s (%s)', r.buf, join(changed, ','), a:elapsed))
     call s:Highlight(r.buf, spans)
-    if r.kind ==# 'ask'
-      echo printf('Ai回答: L%s (%s)', join(changed, ',L'), a:elapsed)
-    else
-      echo printf('AutoConvert: %d行修正 (L%s)', len(changed), join(changed, ',L'))
-    endif
-  elseif r.kind ==# 'typo'
-    call s:Log('clean: no typo (' . a:elapsed . ')')
+    echo printf('AutoConvert: %d行修正 (L%s)', len(changed), join(changed, ',L'))
   else
-    call s:Log('ask: no answer returned (' . a:elapsed . ')')
+    call s:Log('clean: no change (' . a:elapsed . ')')
   endif
 endfunction
 
@@ -473,105 +374,6 @@ function! s:SafeMatchDelete(id, winid) abort
   endtry
 endfunction
 
-" ========== :Ai <指示> — バッファ全体をLLMに指示して編集させる ==========
-
-let s:iprompt = "あなたはテキストエディタの一括編集エンジン。userから編集指示（instruction）とテキスト全文（text）が渡される。指示に従ってtextを編集し、編集後の全文を返す。\n\nルール:\n- 指示に該当する箇所だけを変更し、それ以外は一字も変えない\n- 指示されていない誤字修正・整形・要約・言い換えはしない\n- 出力: JSONのみ。{\"text\": \"編集後の全文\"}"
-
-let s:ijob = v:null
-let s:ireq = {}
-let s:iout = []
-let s:ierr = []
-
-function! auto_convert#Instruct(instruction) abort
-  if s:ijob isnot v:null && job_status(s:ijob) ==# 'run'
-    echo 'Ai: 前の指示を実行中です'
-    return
-  endif
-  let prov = s:Provider()
-  if !s:KeyOk(prov.keyenv)
-    return
-  endif
-  let buf = bufnr('%')
-  let cur = getline(1, '$')
-  let extra = copy(prov.extra)
-  if has_key(extra, 'reasoning_effort')
-    let extra.reasoning_effort = 'low'
-    if has_key(extra, 'temperature')
-      call remove(extra, 'temperature')
-    endif
-  endif
-  let body = extend(extra, {
-        \ 'response_format': {'type': 'json_object'},
-        \ 'messages': [
-        \   {'role': 'system', 'content': s:iprompt},
-        \   {'role': 'user', 'content': json_encode({
-        \      'instruction': a:instruction, 'text': join(cur, "\n")})},
-        \ ]})
-  let s:ireq = {'buf': buf, 'tick': getbufvar(buf, 'changedtick'), 'sent': reltime(),
-        \ 'instruction': a:instruction}
-  let s:iout = []
-  let s:ierr = []
-  let cmd = ['/bin/sh', '-c',
-        \ 'curl -sS --max-time 90 ' . prov.url .
-        \ ' -H "Content-Type: application/json"' .
-        \ ' -H "Authorization: Bearer $' . prov.keyenv . '" -d @-']
-  let s:ijob = job_start(cmd, {
-        \ 'out_cb': {ch, msg -> add(s:iout, msg)},
-        \ 'err_cb': {ch, msg -> add(s:ierr, msg)},
-        \ 'close_cb': function('s:IOnClose'),
-        \ })
-  let ch = job_getchannel(s:ijob)
-  call ch_sendraw(ch, json_encode(body))
-  call ch_close_in(ch)
-  call s:Log(printf('ai-send: buf=%d %d lines', buf, len(cur)))
-  echo 'Ai: 実行中... (' . a:instruction . ')'
-endfunction
-
-function! s:IOnClose(ch) abort
-  let raw = join(s:iout, "\n")
-  let elapsed = printf('%.1fs', reltimefloat(reltime(s:ireq.sent)))
-  try
-    let resp = json_decode(raw)
-    let text = json_decode(resp.choices[0].message.content).text
-  catch
-    let detail = raw ==# '' ? join(s:ierr, ' ') : strpart(raw, 0, 200)
-    call s:Log('ai-error (len=' . strlen(raw) . ')')
-    echohl WarningMsg | echo 'Ai error: ' . strpart(detail, 0, &columns - 12) | echohl None
-    return
-  endtry
-  let r = s:ireq
-  if !bufexists(r.buf)
-    return
-  endif
-  if getbufvar(r.buf, 'changedtick') != r.tick
-    call s:Log('ai-discard: buffer changed during request')
-    echohl WarningMsg | echo 'Ai: 実行中に編集があったため中止しました。もう一度 :Ai してください' | echohl None
-    return
-  endif
-  let lines = split(text, "\n", 1)
-  if len(lines) > 1 && lines[-1] ==# ''
-    call remove(lines, -1)
-  endif
-  let view = bufnr('%') == r.buf ? winsaveview() : {}
-  call setbufline(r.buf, 1, lines)
-  let total = len(getbufline(r.buf, 1, '$'))
-  if total > len(lines)
-    silent call deletebufline(r.buf, len(lines) + 1, total)
-  endif
-  if !empty(view)
-    call winrestview(view)
-  endif
-  let s:snap[r.buf] = getbufline(r.buf, 1, '$')
-  call s:Log(printf('ai-done: buf=%d -> %d lines (%s)', r.buf, len(lines), elapsed))
-  echo printf('Ai: 完了 (%s)。undoはu一回', elapsed)
-endfunction
-
-command! -nargs=1 AutoConvertAi call auto_convert#Instruct(<q-args>)
-" :Ai は他プラグインが既に定義していたら遠慮する（短縮エイリアス）
-if exists(':Ai') != 2
-  command! -nargs=1 Ai call auto_convert#Instruct(<q-args>)
-endif
-
 function! auto_convert#Toggle() abort
   let g:auto_convert_enabled = !g:auto_convert_enabled
   echo 'AutoConvert: ' . (g:auto_convert_enabled ? 'ON' : 'OFF')
@@ -586,6 +388,10 @@ command! AutoConvertToggle call auto_convert#Toggle()
 command! AutoConvertNow call auto_convert#Tick()
 command! AutoConvertStatus call auto_convert#Status()
 
+" 自動リロード時に旧タイマーが残らないように止めてから張り直す
+if exists('s:timer')
+  silent! call timer_stop(s:timer)
+endif
 let s:timer = timer_start(g:auto_convert_interval, function('auto_convert#Tick'), {'repeat': -1})
 
 " 閉じたバッファのsnapshotを掃除（メモリリーク防止）

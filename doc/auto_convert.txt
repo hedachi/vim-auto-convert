@@ -26,10 +26,8 @@ Restart Vim after installation.
 3. Privacy                                                   *auto_convert-privacy*
 
 Auto Convert sends changed lines and nearby context to the selected API
-provider.
-An empty [] request sends up to 40 nearby lines to OpenAI. |:Ai| sends the
-entire current buffer. Do not use these features for text that must not leave
-your computer or organization.
+provider. Do not use it for text that must not leave your computer or
+organization.
 
 API keys are read from environment variables. The default log is
 ~/.vim/auto_convert.log and records timing, status, line numbers, and errors
@@ -47,12 +45,6 @@ without recording edited text or instructions.
                                                       *:AutoConvertStatus*
 :AutoConvertStatus        Show the current state and most recent result.
 
-                                                                 *:Ai*
-:Ai {instruction}     Apply an AI editing instruction to the entire buffer.
-
-Write [] in a changed line to ask the assistant to place its answer inside the
-brackets. The answer job runs separately from automatic conversion.
-
 ==============================================================================
 5. Settings                                                   *auto_convert-settings*
 
@@ -62,8 +54,6 @@ Set options in vimrc before the plugin is loaded: >
   let g:auto_convert_provider = 'luna'
   let g:auto_convert_model = 'gpt-5.6-luna'
   let g:auto_convert_effort = 'none'
-  let g:auto_convert_ask_model = 'gpt-5.6-sol'
-  let g:auto_convert_ask_effort = 'none'
   let g:auto_convert_context = 8
   let g:auto_convert_max_lines = 40
   let g:auto_convert_target_language = 'auto'
