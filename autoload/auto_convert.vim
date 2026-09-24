@@ -16,17 +16,21 @@ endif
 
 let g:auto_convert_enabled   = get(g:, 'auto_convert_enabled', 1)
 let g:auto_convert_interval  = get(g:, 'auto_convert_interval', 3000)
-" provider: 'luna' (gpt-5.6-luna, 約1.5秒) / 'deepseek' (deepseek-v4-flash, 約7秒)
+" provider: 'luna' (gpt-6-luna, 約1秒) / 'deepseek' (deepseek-v4-flash, 約7秒)
 let g:auto_convert_provider  = get(g:, 'auto_convert_provider', 'luna')
 let g:auto_convert_context   = get(g:, 'auto_convert_context', 8)
 let g:auto_convert_max_lines = get(g:, 'auto_convert_max_lines', 40)
 let g:auto_convert_target_language = get(g:, 'auto_convert_target_language', 'auto')
 let g:auto_convert_logfile   = get(g:, 'auto_convert_logfile', expand('~/.vim/auto_convert.log'))
-let g:auto_convert_model     = get(g:, 'auto_convert_model', 'gpt-5.6-luna')
+let g:auto_convert_model     = get(g:, 'auto_convert_model', 'gpt-6-luna')
 let g:auto_convert_effort    = get(g:, 'auto_convert_effort', 'none')
 let g:auto_convert_deepseek_model = get(g:, 'auto_convert_deepseek_model', 'deepseek-v4-flash')
 " プラグインファイル更新時の自動リロード（開発者向け。既定OFF）
 let g:auto_convert_autoreload = get(g:, 'auto_convert_autoreload', 0)
+" 一次判定: 'jev' でTypeSafe Jevに「変換が必要か」を先に聞き、不要ならLLMへ送らない（既定OFF）
+let g:auto_convert_gate      = get(g:, 'auto_convert_gate', '')
+let g:auto_convert_gate_threshold = get(g:, 'auto_convert_gate_threshold', 0.3)
+let g:auto_convert_jev_model = get(g:, 'auto_convert_jev_model', 'jev-latest')
 
 " AX用: 直近の実行結果 {'time':..., 'status':..., 'detail':...}
 let g:auto_convert_last = {}
@@ -34,10 +38,11 @@ let g:auto_convert_last = {}
 highlight default link AutoConvertHl DiffText
 
 let s:snap = {}
-let s:job = v:null
-let s:req = {}
-let s:out = []
-let s:err = []
+" 問い合わせ中（一次判定〜変換結果の適用まで）は次の問い合わせを始めない
+let s:busy = 0
+let s:busy_since = []
+
+let s:gate_prompt = "state.targetの各行は、IMEを使わずに日本語・中国語・韓国語などを音写（ローマ字・ピンイン等）のまま打った可能性のある、書きかけ文章の行である。targetに次のどれかが1つでも含まれるなら「はい」: (1) 日本語・中国語・韓国語などを音写で書いた部分（例: kouiu kanzi de、wo jintian qu gongsi、kutta）。(2) 日本語文中の明らかなタイプミス・誤変換・文字の抜けや重複（例: キホ的に）。(3) 日本語文中の半角の ? ! , や文末の . 。すでに自然な表記の文、英語の文・技術用語・コマンド・コード・URL・製品名だけなら「いいえ」。context_beforeは言語判断の参考で、判定対象はtargetだけ。"
 
 let s:prompt = "あなたはテキストエディタの入力変換エンジン。ユーザーはIME等を使わず、音写（日本語のローマ字、中国語のピンイン等）のまま文章を打つ。書きかけのテキストの一部（target、行番号つき）を、前後の文脈（context_before / context_after）から意図した言語と表記を判断して変換する。\n\n変換対象:\n- 音写入力を、文脈に合う言語の自然な文字・単語・文へ変換する。日本語なら漢字かな交じり、中国語なら漢字、韓国語ならハングルなど、言語を限定しない\n- 文中に音写が混ざる形（例:「日本語を kouiu kanzi de ローマ字入力する」→「日本語をこういう感じでローマ字入力する」）も、行全体が音写だけの形（例:「kouyatte henkan sinaide kaitemo iiyounisite」→「こうやって変換しないで書いてもいいようにして」）も変換する\n- 1語だけの短い断片も、前後の文脈から意図を読んで変換する（例: 食事の話の後の「kutta」→「食った」）\n- 同音・同綴りで複数の解釈がある場合は、前後の文脈で意味が通る方を選ぶ（例: 食べ物の話題の「kare」→「カレー」であり「彼」ではない）\n- 長音は「-」で書かれることがある（例:「kare-」→「カレー」、「ro-maji」→「ローマ字」）\n- 音写自体の打ち間違いも文脈から意図を読んで正しく変換する（例:「kettei siteom machigatteta」→「決定しても間違ってた」）\n- 明らかなタイプミス、誤変換、文字の入れ替わり・抜け・重複も修正する（例:「キホ的に」→「基本的に」）\n- 日本語文中の記号も直す: ? → ？、! → ！、, → 、、文末の . → 。\n- 音写の単語区切りスペースと、音写と変換先言語の文字との境界のスペースは、変換先言語で不自然なら変換時に削除する（例: 日本語の「を kouiu」→「をこういう」）。英単語・技術用語の前後の自然なスペースは残す\n- target_language が auto 以外なら、その言語を優先する\n\n守ること:\n- すでに自然な表記の部分は変更しない\n- 意味の言い換え、文体・敬語の変更、内容の追加・削除をしない。変換していない箇所の句読点やスペースを変えない\n- 英語の技術用語・コマンド・製品名・URL・コード、および文脈から英文として書かれた文はそのまま残す\n- 行の分割・結合・並べ替えをしない\n\n出力: JSONのみ。{\"fixes\": {\"行番号\": \"その行全体の変換後テキスト\"}}。変換が必要な行だけ入れる。変換が1行もなければ {\"fixes\": {}}。"
 
@@ -114,8 +119,13 @@ function! auto_convert#Tick(...) abort
   if !g:auto_convert_enabled
     return
   endif
-  if s:job isnot v:null && job_status(s:job) ==# 'run'
-    return
+  if s:busy
+    " 応答が返らないまま固まった場合の保険（curlは最長25秒で終わる）
+    if reltimefloat(reltime(s:busy_since)) < 60
+      return
+    endif
+    call s:Log('error: request stuck > 60s, reset')
+    let s:busy = 0
   endif
   if !&modifiable || &buftype !=# '' || &readonly
     return
@@ -167,51 +177,95 @@ function! s:Send(buf, cur, lstart, lend, target, partial) abort
   if !s:KeyOk(prov.keyenv)
     return
   endif
-  let numbered = {}
-  for i in range(len(a:target))
-    let numbered[string(a:lstart + i)] = a:target[i]
-  endfor
   let nctx = g:auto_convert_context
   let before = a:lstart - 1 - nctx > 0 ? a:cur[a:lstart - 1 - nctx : a:lstart - 2]
         \ : (a:lstart >= 2 ? a:cur[0 : a:lstart - 2] : [])
   let after = a:cur[a:lend : a:lend - 1 + nctx]
+  let req = {'buf': a:buf, 'tick': getbufvar(a:buf, 'changedtick'),
+        \ 'start': a:lstart, 'end': a:lend, 'target': a:target, 'sent': reltime(),
+        \ 'partial': a:partial, 'curlen': len(a:cur), 'before': before, 'after': after}
+  let s:busy = 1
+  let s:busy_since = reltime()
+  if g:auto_convert_gate ==# 'jev' && s:KeyOk('TYPESAFE_API_KEY')
+    let body = {'model': g:auto_convert_jev_model,
+          \ 'state': {'context_before': before[-3:], 'target': a:target},
+          \ 'questions': {'needs': {'type': 'noul', 'instructions': s:gate_prompt}}}
+    call s:Post('https://api.typesafe.ai/v1/systemone', 'TYPESAFE_API_KEY', body,
+          \ function('s:OnGate', [req]))
+    return
+  endif
+  call s:SendLLM(req)
+endfunction
+
+function! s:OnGate(req, raw, err) abort
+  let ms = float2nr(reltimefloat(reltime(a:req.sent)) * 1000)
+  let p = -1.0
+  try
+    let resp = json_decode(a:raw)
+    let p = resp.answers.needs.noul
+  catch
+  endtry
+  if type(p) != v:t_float && type(p) != v:t_number || p < 0
+    " 一次判定の失敗は変換を止めない。原因を表示してLLMへ送る
+    call s:Warn(printf('gate error (%dms, len=%d%s) -> LLMへ送信', ms, strlen(a:raw),
+          \ empty(a:err) ? '' : ', ' . join(a:err, ' ')))
+    call s:SendLLM(a:req)
+    return
+  endif
+  if p < g:auto_convert_gate_threshold
+    call s:Log(printf('gate: skip p=%.2f (%dms)', p, ms))
+    call s:ApplyFixes(a:req, {}, printf('gate %dms', ms))
+    return
+  endif
+  call s:Log(printf('gate: pass p=%.2f (%dms)', p, ms))
+  call s:SendLLM(a:req)
+endfunction
+
+function! s:SendLLM(req) abort
+  let prov = s:Provider()
+  let r = a:req
+  let numbered = {}
+  for i in range(len(r.target))
+    let numbered[string(r.start + i)] = r.target[i]
+  endfor
   let body = extend(copy(prov.extra), {
         \ 'response_format': {'type': 'json_object'},
         \ 'messages': [
         \   {'role': 'system', 'content': s:prompt},
         \   {'role': 'user', 'content': json_encode({
         \      'target_language': g:auto_convert_target_language,
-        \      'context_before': before, 'target': numbered, 'context_after': after})},
+        \      'context_before': r.before, 'target': numbered, 'context_after': r.after})},
         \ ]})
-  let s:req = {'buf': a:buf, 'tick': getbufvar(a:buf, 'changedtick'),
-        \ 'start': a:lstart, 'end': a:lend, 'target': a:target, 'sent': reltime(),
-        \ 'partial': a:partial, 'curlen': len(a:cur)}
-  let s:out = []
-  let s:err = []
+  call s:Post(prov.url, prov.keyenv, body, function('s:OnLLM', [r]))
+  call s:Log(printf('send: buf=%d L%d-%d (%d lines) provider=%s', r.buf, r.start, r.end, len(r.target), g:auto_convert_provider))
+endfunction
+
+" curlでPOSTし、終了時に cb(raw, errlines) を呼ぶ。出力は問い合わせごとに別々に持つ
+function! s:Post(url, keyenv, body, cb) abort
+  let io = {'out': [], 'err': []}
   let cmd = ['/bin/sh', '-c',
-        \ 'curl -sS --max-time 25 ' . prov.url .
+        \ 'curl -sS --max-time 25 ' . a:url .
         \ ' -H "Content-Type: application/json"' .
-        \ ' -H "Authorization: Bearer $' . prov.keyenv . '" -d @-']
-  let s:job = job_start(cmd, {
-        \ 'out_cb': function('s:OnOut'),
-        \ 'err_cb': function('s:OnErr'),
-        \ 'close_cb': function('s:OnClose'),
+        \ ' -H "Authorization: Bearer $' . a:keyenv . '" -d @-']
+  let job = job_start(cmd, {
+        \ 'out_cb': {ch, msg -> add(io.out, msg)},
+        \ 'err_cb': {ch, msg -> add(io.err, msg)},
+        \ 'close_cb': {ch -> a:cb(join(io.out, "\n"), io.err)},
         \ })
-  let ch = job_getchannel(s:job)
-  call ch_sendraw(ch, json_encode(body))
+  let ch = job_getchannel(job)
+  call ch_sendraw(ch, json_encode(a:body))
   call ch_close_in(ch)
-  call s:Log(printf('send: buf=%d L%d-%d (%d lines) provider=%s', a:buf, a:lstart, a:lend, len(a:target), g:auto_convert_provider))
 endfunction
 
-function! s:OnOut(ch, msg) abort
-  call add(s:out, a:msg)
-endfunction
-
-function! s:OnErr(ch, msg) abort
-  call add(s:err, a:msg)
+function! s:Warn(msg) abort
+  call s:Log('error: ' . a:msg)
+  echohl WarningMsg
+  echo 'AutoConvert: ' . strpart(a:msg, 0, &columns - 20)
+  echohl None
 endfunction
 
 function! s:Fail(msg) abort
+  let s:busy = 0
   let g:auto_convert_last = {'time': strftime('%H:%M:%S'), 'status': 'error', 'detail': a:msg}
   call s:Log('error: ' . a:msg)
   echohl WarningMsg
@@ -219,18 +273,17 @@ function! s:Fail(msg) abort
   echohl None
 endfunction
 
-function! s:OnClose(ch) abort
-  let raw = join(s:out, "\n")
-  let elapsed = printf('%.1fs', reltimefloat(reltime(s:req.sent)))
-  if raw ==# ''
-    call s:Fail('empty response (' . join(s:err, ' ') . ')')
+function! s:OnLLM(req, raw, err) abort
+  let elapsed = printf('%.1fs', reltimefloat(reltime(a:req.sent)))
+  if a:raw ==# ''
+    call s:Fail('empty response (' . join(a:err, ' ') . ')')
     return
   endif
   try
-    let resp = json_decode(raw)
+    let resp = json_decode(a:raw)
   catch
-    " 本文はログに残さない方針のため長さだけ記録し、画面にだけ内容を出す
-    call s:Fail('bad json (len=' . strlen(raw) . ')')
+    " 本文はログに残さない方針のため長さだけ記録する
+    call s:Fail('bad json (len=' . strlen(a:raw) . ')')
     return
   endtry
   if type(resp) != v:t_dict || !has_key(resp, 'choices')
@@ -243,10 +296,11 @@ function! s:OnClose(ch) abort
     call s:Fail('bad content (len=' . strlen(resp.choices[0].message.content) . ')')
     return
   endtry
-  call s:ApplyFixes(s:req, fixes, elapsed)
+  call s:ApplyFixes(a:req, fixes, elapsed)
 endfunction
 
 function! s:ApplyFixes(r, fixes, elapsed) abort
+  let s:busy = 0
   let r = a:r
   if !bufexists(r.buf)
     return
@@ -380,8 +434,9 @@ function! auto_convert#Toggle() abort
 endfunction
 
 function! auto_convert#Status() abort
-  echo printf('AutoConvert: %s / provider=%s / last=%s',
-        \ g:auto_convert_enabled ? 'ON' : 'OFF', g:auto_convert_provider, string(g:auto_convert_last))
+  echo printf('AutoConvert: %s / provider=%s / gate=%s / last=%s',
+        \ g:auto_convert_enabled ? 'ON' : 'OFF', g:auto_convert_provider,
+        \ empty(g:auto_convert_gate) ? 'off' : g:auto_convert_gate, string(g:auto_convert_last))
 endfunction
 
 command! AutoConvertToggle call auto_convert#Toggle()
