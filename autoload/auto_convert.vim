@@ -29,7 +29,7 @@ let g:auto_convert_deepseek_model = get(g:, 'auto_convert_deepseek_model', 'deep
 let g:auto_convert_autoreload = get(g:, 'auto_convert_autoreload', 0)
 " 一次判定: 'jev' でTypeSafe Jevに「変換が必要か」を先に聞き、不要ならLLMへ送らない（既定OFF）
 let g:auto_convert_gate      = get(g:, 'auto_convert_gate', '')
-let g:auto_convert_gate_threshold = get(g:, 'auto_convert_gate_threshold', 0.3)
+let g:auto_convert_gate_threshold = get(g:, 'auto_convert_gate_threshold', 0.45)
 let g:auto_convert_jev_model = get(g:, 'auto_convert_jev_model', 'jev-latest')
 
 " AX用: 直近の実行結果 {'time':..., 'status':..., 'detail':...}
@@ -42,7 +42,13 @@ let s:snap = {}
 let s:busy = 0
 let s:busy_since = []
 
-let s:gate_prompt = "state.targetの各行は、IMEを使わずに日本語・中国語・韓国語などを音写（ローマ字・ピンイン等）のまま打った可能性のある、書きかけ文章の行である。targetに次のどれかが1つでも含まれるなら「はい」: (1) 日本語・中国語・韓国語などを音写で書いた部分（例: kouiu kanzi de、wo jintian qu gongsi、kutta）。(2) 日本語文中の明らかなタイプミス・誤変換・文字の抜けや重複（例: キホ的に）。(3) 日本語文中の半角の ? ! , や文末の . 。すでに自然な表記の文、英語の文・技術用語・コマンド・コード・URL・製品名だけなら「いいえ」。context_beforeは言語判断の参考で、判定対象はtargetだけ。"
+" 一次判定は観点別の3問を並列で聞き、最大値を「変換が必要な確率」とする
+" （1問にまとめると、日本語文中にローマ字が1語だけ混ざる形を見落とした）
+let s:gate_questions = {
+      \ 'romaji': {'type': 'noul', 'instructions': 'state.targetの中に、日本語・中国語・韓国語などの単語を英字の音写（ローマ字・ピンイン等）で書いた部分が1語でも含まれるか。日本語の文の中に1語だけ混ざる場合も含む（例: 友情monogatari、これはsugoku大事、今日はkaigiがある）。英語の単語・英文・技術用語・製品名・コード・URLは音写ではない。'},
+      \ 'typo': {'type': 'noul', 'instructions': 'state.targetの日本語の文に、明らかなタイプミス・誤変換・文字の抜けや重複（例: キホ的に、今日hあ）が含まれるか。'},
+      \ 'punct': {'type': 'noul', 'instructions': 'state.targetの日本語の文の中で、半角の ? ! , や文末の . が句読点として使われているか。'},
+      \ }
 
 let s:prompt = "あなたはテキストエディタの入力変換エンジン。ユーザーはIME等を使わず、音写（日本語のローマ字、中国語のピンイン等）のまま文章を打つ。書きかけのテキストの一部（target、行番号つき）を、前後の文脈（context_before / context_after）から意図した言語と表記を判断して変換する。\n\n変換対象:\n- 音写入力を、文脈に合う言語の自然な文字・単語・文へ変換する。日本語なら漢字かな交じり、中国語なら漢字、韓国語ならハングルなど、言語を限定しない\n- 文中に音写が混ざる形（例:「日本語を kouiu kanzi de ローマ字入力する」→「日本語をこういう感じでローマ字入力する」）も、行全体が音写だけの形（例:「kouyatte henkan sinaide kaitemo iiyounisite」→「こうやって変換しないで書いてもいいようにして」）も変換する\n- 1語だけの短い断片も、前後の文脈から意図を読んで変換する（例: 食事の話の後の「kutta」→「食った」）\n- 同音・同綴りで複数の解釈がある場合は、前後の文脈で意味が通る方を選ぶ（例: 食べ物の話題の「kare」→「カレー」であり「彼」ではない）\n- 長音は「-」で書かれることがある（例:「kare-」→「カレー」、「ro-maji」→「ローマ字」）\n- 音写自体の打ち間違いも文脈から意図を読んで正しく変換する（例:「kettei siteom machigatteta」→「決定しても間違ってた」）\n- 明らかなタイプミス、誤変換、文字の入れ替わり・抜け・重複も修正する（例:「キホ的に」→「基本的に」）\n- 日本語文中の記号も直す: ? → ？、! → ！、, → 、、文末の . → 。\n- 音写の単語区切りスペースと、音写と変換先言語の文字との境界のスペースは、変換先言語で不自然なら変換時に削除する（例: 日本語の「を kouiu」→「をこういう」）。英単語・技術用語の前後の自然なスペースは残す\n- target_language が auto 以外なら、その言語を優先する\n\n守ること:\n- すでに自然な表記の部分は変更しない\n- 意味の言い換え、文体・敬語の変更、内容の追加・削除をしない。変換していない箇所の句読点やスペースを変えない\n- 英語の技術用語・コマンド・製品名・URL・コード、および文脈から英文として書かれた文はそのまま残す\n- 行の分割・結合・並べ替えをしない\n\n出力: JSONのみ。{\"fixes\": {\"行番号\": \"その行全体の変換後テキスト\"}}。変換が必要な行だけ入れる。変換が1行もなければ {\"fixes\": {}}。"
 
@@ -189,7 +195,7 @@ function! s:Send(buf, cur, lstart, lend, target, partial) abort
   if g:auto_convert_gate ==# 'jev' && s:KeyOk('TYPESAFE_API_KEY')
     let body = {'model': g:auto_convert_jev_model,
           \ 'state': {'context_before': before[-3:], 'target': a:target},
-          \ 'questions': {'needs': {'type': 'noul', 'instructions': s:gate_prompt}}}
+          \ 'questions': s:gate_questions}
     call s:Post('https://api.typesafe.ai/v1/systemone', 'TYPESAFE_API_KEY', body,
           \ function('s:OnGate', [req]))
     return
@@ -200,12 +206,18 @@ endfunction
 function! s:OnGate(req, raw, err) abort
   let ms = float2nr(reltimefloat(reltime(a:req.sent)) * 1000)
   let p = -1.0
+  let detail = ''
   try
-    let resp = json_decode(a:raw)
-    let p = resp.answers.needs.noul
+    let ans = json_decode(a:raw).answers
+    for k in sort(keys(s:gate_questions))
+      let v = ans[k].noul
+      let p = v > p ? v : p
+      let detail .= printf(' %s=%.2f', k, v)
+    endfor
   catch
+    let p = -1.0
   endtry
-  if type(p) != v:t_float && type(p) != v:t_number || p < 0
+  if p < 0
     " 一次判定の失敗は変換を止めない。原因を表示してLLMへ送る
     call s:Warn(printf('gate error (%dms, len=%d%s) -> LLMへ送信', ms, strlen(a:raw),
           \ empty(a:err) ? '' : ', ' . join(a:err, ' ')))
@@ -213,11 +225,11 @@ function! s:OnGate(req, raw, err) abort
     return
   endif
   if p < g:auto_convert_gate_threshold
-    call s:Log(printf('gate: skip p=%.2f (%dms)', p, ms))
+    call s:Log(printf('gate: skip L%d-%d p=%.2f%s (%dms)', a:req.start, a:req.end, p, detail, ms))
     call s:ApplyFixes(a:req, {}, printf('gate %dms', ms))
     return
   endif
-  call s:Log(printf('gate: pass p=%.2f (%dms)', p, ms))
+  call s:Log(printf('gate: pass L%d-%d p=%.2f%s (%dms)', a:req.start, a:req.end, p, detail, ms))
   call s:SendLLM(a:req)
 endfunction
 

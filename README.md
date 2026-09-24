@@ -130,7 +130,7 @@ let g:auto_convert_gate = 'jev'
 export TYPESAFE_API_KEY='your-api-key'
 ```
 
-判定が0.3未満の行はLLMへ送りません（`g:auto_convert_gate_threshold` で変更可）。Jevへの問い合わせが失敗した場合は、エラーを表示したうえでLLMへ送ります。
+判定が0.45未満の行はLLMへ送りません（`g:auto_convert_gate_threshold` で変更可）。Jevへの問い合わせが失敗した場合は、エラーを表示したうえでLLMへ送ります。
 
 その他の設定は `:help auto_convert-settings` で確認できます。
 

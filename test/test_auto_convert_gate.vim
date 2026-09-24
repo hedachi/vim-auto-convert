@@ -1,6 +1,7 @@
 " Jevによる一次判定のテスト（要 OPENAI_API_KEY と TYPESAFE_API_KEY）
 " 1) 変換不要な行はLLMへ送らない 2) 変換が必要な行は変換される
 " 3) 連続で問い合わせても応答の取り違えが起きない 4) Jevが失敗してもLLMで変換される
+" 5) 日本語文中にローマ字が1語だけ混ざる行も見落とさない
 " 実行: vim -Nu NONE -n -es -S test/test_auto_convert_gate.vim
 " 結果: test/results/test_auto_convert_gate_result.txt
 set nocompatible
@@ -57,6 +58,18 @@ AutoConvertNow
 call s:Wait('s:Idle()')
 let $TYPESAFE_API_KEY = s:key
 call add(s:r, 'fallback=' . (s:LogHas('gate error') == 1 && getline(4) !~# 'asita' ? 'OK' : 'BAD') . ' ' . getline(4))
+
+" 5) 日本語文中にローマ字が1語だけ混ざる行も一次判定を通過する（見落とし防止）
+let s:mixed = ['社会人の友情monogatari', 'これはsugoku大事な話', '明日のyoteiを確認する']
+let s:ok = 0
+for s:i in range(len(s:mixed))
+  let s:prev = copy(g:auto_convert_last)
+  call setline(5 + s:i, s:mixed[s:i])
+  AutoConvertNow
+  call s:Wait('s:Idle()')
+  let s:ok += s:LogHas('gate: pass L' . (5 + s:i) . '-')
+endfor
+call add(s:r, 'mixed_pass=' . (s:ok == len(s:mixed) ? 'OK' : 'BAD') . ' (' . s:ok . '/' . len(s:mixed) . ')')
 
 call writefile(s:r + ['--- log'] + readfile(g:auto_convert_logfile), s:root . '/test/results/test_auto_convert_gate_result.txt')
 qall!

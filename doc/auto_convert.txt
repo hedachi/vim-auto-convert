@@ -64,7 +64,7 @@ DeepSeek endpoint. g:auto_convert_deepseek_model changes its model name.
 
 Optional pre-check with TypeSafe Jev: >
   let g:auto_convert_gate = 'jev'
-  let g:auto_convert_gate_threshold = 0.3
+  let g:auto_convert_gate_threshold = 0.45
 <
 With g:auto_convert_gate set to 'jev' and TYPESAFE_API_KEY set, changed lines
 are first sent to Jev, which estimates the probability that they need
