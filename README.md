@@ -118,25 +118,11 @@ let g:auto_convert_provider = 'deepseek'
 let g:auto_convert_deepseek_model = 'deepseek-v4-flash'
 ```
 
-## 一次判定（任意）
-
-TypeSafeのJevで「変換が必要か」を先に判定し、不要な行はLLMへ送らないようにできます。
-
-```vim
-let g:auto_convert_gate = 'jev'
-```
-
-```sh
-export TYPESAFE_API_KEY='your-api-key'
-```
-
-判定が0.45未満の行はLLMへ送りません（`g:auto_convert_gate_threshold` で変更可）。Jevへの問い合わせが失敗した場合は、エラーを表示したうえでLLMへ送ります。
-
 その他の設定は `:help auto_convert-settings` で確認できます。
 
 ## プライバシー
 
-自動変換では、変更された行と前後の文脈を選択したAPI事業者へ送信します。一次判定を有効にした場合は、変更された行と直前の数行をTypeSafeへも送信します。
+自動変換では、変更された行と前後の文脈を選択したAPI事業者へ送信します。
 
 - APIキーは環境変数から読み取ります。
 - ログには入力本文を記録しません。

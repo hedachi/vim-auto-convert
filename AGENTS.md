@@ -25,8 +25,8 @@
 - 混在入力の境界スペース削除は `test/test_auto_convert_boundary.vim` で確認する（`boundary_space=REMOVED(OK)` が合格）。
 - 短い断片・同音語の文脈変換は `test/test_auto_convert_fragment.vim` で確認する（`fragment=OK` と `homophone=OK` が合格）。
 - 改行時の即時送信は `test/test_auto_convert_newline.vim` で確認する（`converted=OK` と `immediate=OK` が合格）。
-- Jevによる一次判定は `test/test_auto_convert_gate.vim` で確認する（要 `TYPESAFE_API_KEY`。`skip=OK`・`pass=OK`・`no_mixup=OK`・`fallback=OK`・`mixed_pass=OK` が合格。`no_mixup` は問い合わせが重なったときの応答取り違えの検出）。
-- 変換の期待値一覧は `test/cases_auto_convert.tsv`、実行は `test/test_auto_convert_cases.vim`（`cases=OK` が合格。keep=変えてはいけない、safe=変換してもよいが条件を満たす、conv=変換必須）。`TYPESAFE_API_KEY` の有無で一次判定あり／なしを切り替え、`--cmd "let g:auto_convert_test_tag='_x'"` で結果ファイルを分けて並行実行できる。一次判定ありでは、同音異義語の誤変換とひらがなのままの語をJevが見落とす既知の限界がある。
+- 問い合わせが重なったときの応答取り違えは `test/test_auto_convert_race.vim` で確認する（`converted=OK` と `no_mixup=OK` が合格）。
+- 変換の期待値一覧は `test/cases_auto_convert.tsv`、実行は `test/test_auto_convert_cases.vim`（`cases=OK` が合格。keep=変えてはいけない、safe=変換してもよいが条件を満たす、conv=変換必須）。`--cmd "let g:auto_convert_test_tag='_x'"` で結果ファイルを分けて並行実行できる。
 - テスト方法を追加・変更した場合は、このファイルへ実行コマンドと確認対象を追記する。
 - 利用者への変更報告では、利用者にとって何が変わったか、どう確認したかを簡潔に説明する。
 

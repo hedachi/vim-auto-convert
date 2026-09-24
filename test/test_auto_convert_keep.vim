@@ -1,10 +1,9 @@
-" 英字を含むのが正常な行を書き換えないことのテスト（要 OPENAI_API_KEY、TYPESAFE_API_KEY があれば一次判定も通す）
+" 英字を含むのが正常な行を書き換えないことのテスト（要 OPENAI_API_KEY）
 " 実行: vim -Nu NONE -n -es -S test/test_auto_convert_keep.vim
 " 結果: test/results/test_auto_convert_keep_result.txt（keep=OK が合格。変わった行は CHANGED で列挙）
 set nocompatible
 let s:root = fnamemodify(expand('<sfile>'), ':p:h:h')
 execute 'set runtimepath^=' . fnameescape(s:root)
-let g:auto_convert_gate = empty($TYPESAFE_API_KEY) ? '' : 'jev'
 let g:auto_convert_logfile = s:root . '/test/results/test_auto_convert_keep.log'
 call mkdir(s:root . '/test/results', 'p')
 call delete(g:auto_convert_logfile)

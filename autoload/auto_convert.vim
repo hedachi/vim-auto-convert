@@ -27,10 +27,6 @@ let g:auto_convert_effort    = get(g:, 'auto_convert_effort', 'low')
 let g:auto_convert_deepseek_model = get(g:, 'auto_convert_deepseek_model', 'deepseek-v4-flash')
 " プラグインファイル更新時の自動リロード（開発者向け。既定OFF）
 let g:auto_convert_autoreload = get(g:, 'auto_convert_autoreload', 0)
-" 一次判定: 'jev' でTypeSafe Jevに「変換が必要か」を先に聞き、不要ならLLMへ送らない（既定OFF）
-let g:auto_convert_gate      = get(g:, 'auto_convert_gate', '')
-let g:auto_convert_gate_threshold = get(g:, 'auto_convert_gate_threshold', 0.45)
-let g:auto_convert_jev_model = get(g:, 'auto_convert_jev_model', 'jev-latest')
 
 " AX用: 直近の実行結果 {'time':..., 'status':..., 'detail':...}
 let g:auto_convert_last = {}
@@ -41,14 +37,6 @@ let s:snap = {}
 " 問い合わせ中（一次判定〜変換結果の適用まで）は次の問い合わせを始めない
 let s:busy = 0
 let s:busy_since = []
-
-" 一次判定は観点別の3問を並列で聞き、最大値を「変換が必要な確率」とする
-" （1問にまとめると、日本語文中にローマ字が1語だけ混ざる形を見落とした）
-let s:gate_questions = {
-      \ 'romaji': {'type': 'noul', 'instructions': 'state.targetの中に、日本語・中国語・韓国語などの単語を英字の音写（ローマ字・ピンイン等）で書いた部分が1語でも含まれるか。日本語の文の中に1語だけ混ざる場合も含む（例: 友情monogatari、これはsugoku大事、今日はkaigiがある）。英語の単語・英文・技術用語・製品名・コード・URLは音写ではない。'},
-      \ 'typo': {'type': 'noul', 'instructions': 'state.targetの日本語の文に、明らかなタイプミス・誤変換・文字の抜けや重複（例: キホ的に、今日hあ）、文脈上明らかな同音異義語の誤変換（例: 機械があれば行く→機会）、または一般に漢字で書く語がひらがなのまま（例: かんがえやすい→考えやすい、駅にいく→駅に行く）の部分が含まれるか。'},
-      \ 'punct': {'type': 'noul', 'instructions': 'state.targetの日本語の文の中で、半角の ? ! , や文末の . が句読点として使われているか。'},
-      \ }
 
 let s:prompt = "あなたはテキストエディタの入力変換エンジン。ユーザーはIME等を使わず、音写（日本語のローマ字、中国語のピンイン等）のまま文章を打つ。書きかけのテキストの一部（target、行番号つき）を、前後の文脈（context_before / context_after）から意図した言語と表記を判断して変換する。\n\n変換対象:\n- 音写入力を、文脈に合う言語の自然な文字・単語・文へ変換する。日本語なら漢字かな交じり、中国語なら漢字、韓国語ならハングルなど、言語を限定しない\n- 文中に音写が混ざる形（例:「日本語を kouiu kanzi de ローマ字入力する」→「日本語をこういう感じでローマ字入力する」）も、行全体が音写だけの形（例:「kouyatte henkan sinaide kaitemo iiyounisite」→「こうやって変換しないで書いてもいいようにして」）も変換する\n- 1語だけの短い断片も、前後の文脈から意図を読んで変換する（例: 食事の話の後の「kutta」→「食った」）\n- 同音・同綴りで複数の解釈がある場合は、前後の文脈で意味が通る方を選ぶ（例: 食べ物の話題の「kare」→「カレー」であり「彼」ではない）\n- 長音は「-」で書かれることがある（例:「kare-」→「カレー」、「ro-maji」→「ローマ字」）\n- 音写自体の打ち間違いも文脈から意図を読んで正しく変換する（例:「kettei siteom machigatteta」→「決定しても間違ってた」）\n- 明らかなタイプミス、誤変換、文字の入れ替わり・抜け・重複も修正する（例:「キホ的に」→「基本的に」）。文脈上明らかな同音異義語の誤変換も直す（例:「機械があれば行く」→「機会があれば行く」）。一般に漢字で書く語がひらがなのままなら、文脈から意味が確定する場合に漢字にする（例:「かんがえやすい」→「考えやすい」、「駅にいく」→「駅に行く」）\n- 日本語文中の記号も直す: ? → ？、! → ！、, → 、、文末の . → 。\n- 音写の単語区切りスペースと、音写と変換先言語の文字との境界のスペースは、変換先言語で不自然なら変換時に削除する（例: 日本語の「を kouiu」→「をこういう」）。英単語・技術用語の前後の自然なスペースは残す\n- target_language が auto 以外なら、その言語を優先する\n\n守ること:\n- すでに自然な表記の部分は変更しない。英字の綴り・大文字小文字は変えない（例:「apiも」を「APIも」にしない）\n- 意味の言い換え、文体・敬語の変更、内容の追加・削除をしない。変換していない箇所の句読点やスペースを変えない\n- 英語の技術用語・コマンド・製品名・モデル名・ファイル名・URL・コード、および文脈から英文として書かれた文はそのまま残す。識別子の直後に音写が続いていても、識別子部分の綴り・大文字小文字は変えない（例:「claude-codede tukau」→「claude-codeで使う」）\n- 日本語のローマ字には l を使わない。l を含む語は日本語の音写として変換しない\n- 行の分割・結合・並べ替えをしない\n\n出力: JSONのみ。{\"fixes\": {\"行番号\": \"その行全体の変換後テキスト\"}}。変換が必要な行だけ入れる。変換が1行もなければ {\"fixes\": {}}。"
 
@@ -192,45 +180,7 @@ function! s:Send(buf, cur, lstart, lend, target, partial) abort
         \ 'partial': a:partial, 'curlen': len(a:cur), 'before': before, 'after': after}
   let s:busy = 1
   let s:busy_since = reltime()
-  if g:auto_convert_gate ==# 'jev' && s:KeyOk('TYPESAFE_API_KEY')
-    let body = {'model': g:auto_convert_jev_model,
-          \ 'state': {'context_before': before[-3:], 'target': a:target},
-          \ 'questions': s:gate_questions}
-    call s:Post('https://api.typesafe.ai/v1/systemone', 'TYPESAFE_API_KEY', body,
-          \ function('s:OnGate', [req]))
-    return
-  endif
   call s:SendLLM(req)
-endfunction
-
-function! s:OnGate(req, raw, err) abort
-  let ms = float2nr(reltimefloat(reltime(a:req.sent)) * 1000)
-  let p = -1.0
-  let detail = ''
-  try
-    let ans = json_decode(a:raw).answers
-    for k in sort(keys(s:gate_questions))
-      let v = ans[k].noul
-      let p = v > p ? v : p
-      let detail .= printf(' %s=%.2f', k, v)
-    endfor
-  catch
-    let p = -1.0
-  endtry
-  if p < 0
-    " 一次判定の失敗は変換を止めない。原因を表示してLLMへ送る
-    call s:Warn(printf('gate error (%dms, len=%d%s) -> LLMへ送信', ms, strlen(a:raw),
-          \ empty(a:err) ? '' : ', ' . join(a:err, ' ')))
-    call s:SendLLM(a:req)
-    return
-  endif
-  if p < g:auto_convert_gate_threshold
-    call s:Log(printf('gate: skip L%d-%d p=%.2f%s (%dms)', a:req.start, a:req.end, p, detail, ms))
-    call s:ApplyFixes(a:req, {}, printf('gate %dms', ms))
-    return
-  endif
-  call s:Log(printf('gate: pass L%d-%d p=%.2f%s (%dms)', a:req.start, a:req.end, p, detail, ms))
-  call s:SendLLM(a:req)
 endfunction
 
 function! s:SendLLM(req) abort
@@ -267,13 +217,6 @@ function! s:Post(url, keyenv, body, cb) abort
   let ch = job_getchannel(job)
   call ch_sendraw(ch, json_encode(a:body))
   call ch_close_in(ch)
-endfunction
-
-function! s:Warn(msg) abort
-  call s:Log('error: ' . a:msg)
-  echohl WarningMsg
-  echo 'AutoConvert: ' . strpart(a:msg, 0, &columns - 20)
-  echohl None
 endfunction
 
 function! s:Fail(msg) abort
@@ -446,9 +389,8 @@ function! auto_convert#Toggle() abort
 endfunction
 
 function! auto_convert#Status() abort
-  echo printf('AutoConvert: %s / provider=%s / gate=%s / last=%s',
-        \ g:auto_convert_enabled ? 'ON' : 'OFF', g:auto_convert_provider,
-        \ empty(g:auto_convert_gate) ? 'off' : g:auto_convert_gate, string(g:auto_convert_last))
+  echo printf('AutoConvert: %s / provider=%s / last=%s',
+        \ g:auto_convert_enabled ? 'ON' : 'OFF', g:auto_convert_provider, string(g:auto_convert_last))
 endfunction
 
 command! AutoConvertToggle call auto_convert#Toggle()
