@@ -1,0 +1,46 @@
+# kind	context(前の行。なければ空)	input	must_contain(|区切り)	must_not_contain(|区切り)
+# keep: 1文字も変えてはいけない / safe: 変換してもよいが条件を満たす / conv: must_containを全部含み、must_not_containを1つも含まない
+keep		シミュレーションRPGとかね		
+keep		apiも6lunaにしといて		
+safe		APIなにつかってるんだっけ AI	API|AI	
+keep		gpt-6-lunaは約0.9秒で返る		
+keep		Jevで一次判定してからLunaへ送る		
+keep		sol lowにしといて		
+keep		effortはnoneにして		
+keep		vim-auto-convertのE2Eテストが全部OK		
+keep		22行目のp=0.23でskipされた		
+keep		Max $200プランで使っている		
+safe		pyramid.txtの22行目みてほしい	pyramid.txt|22行目	
+keep		for the sake of testing		
+keep		I will come home later.		
+keep		Tokyo Game Showに行く		
+keep		ReactのuseEffectでfetchする		
+keep		3秒ごとにdiffを取る		
+keep		HP 100、MP 30、LV 5		
+keep		export TYPESAFE_API_KEY='your-api-key'		
+keep		ローマ字が含まれるのが正常なケースを直さないようになってる？		
+keep		もっと微妙なケースもテストして		
+conv		ro-maji ga fukumareru no ga seijou na ke-su	ローマ字|正常	ro-maji|seijou
+conv		simyure-syon RPG toka ne	RPG	simyure|toka
+conv		mottomo bimyou na ke-su mo tesuto site	微妙|テスト	bimyou|tesuto
+conv	LLMへ送る前に、Jevで送るかどうかを判定する	Jevで ichiji hantei suru	Jev|一次判定	ichiji|hantei
+conv		gpt-6-lunani sitoite	gpt-6-luna	sitoite
+conv		API nani tukatteru ndakke	API	tukatteru
+conv		テストを fuyasite	テストを増やして	fuyasite
+conv		この文章の中でtekitouに拾って	適当	tekitou
+conv		なんか gohenkan させてみたり	誤変換	gohenkan
+conv		22gyoume mite hosii	22行目	gyoume
+conv	昼にカレー屋に行った	kare- ga oisikatta	カレー	kare|oisi
+conv	昼に寿司屋に行った	sake mo nonda	酒	sake|nonda
+conv		現状把握しtえ	現状把握して	しtえ
+conv		キホ的に適当に打つ	基本的に	キホ的
+conv	LLMへ送る前に、Jevで送るかどうかを判定する	一時判定をJevでする	一次判定	一時判定
+conv		以外と簡単だった	意外と	以外と
+conv		これでいいのかな?	？	?
+conv		じゃまｍ		ｍ
+conv		機械があれば行きたい	機会	機械
+conv		claude-codede tukau	claude-code	tukau
+keep		lowにしてlatencyを下げる		
+safe		なるほどね、そういうことか	なるほど	
+safe		ちょっとまってて	ちょっと	
+conv		きらら系みたいに登場人物が全員女性で、異性がいないので感動イベントが恋愛に発展する期待が生じにくく、泣きの方向にいきやすい	行きやすい|きらら系	いきやすい
